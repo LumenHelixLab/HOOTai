@@ -2,7 +2,8 @@ const https = require('https');
 const fs = require('fs');
 const path = require('path');
 
-const BASE_URL = 'https://raw.githubusercontent.com/EveryInc/compound-engineering-plugin/main/plugins/compound-engineering/skills';
+// Upstream moved skills from plugins/compound-engineering/skills/ to root skills/ (v3.x restructure)
+const BASE_URL = 'https://raw.githubusercontent.com/EveryInc/compound-engineering-plugin/main/skills';
 const CACHE_DIR = path.join(__dirname, '..', 'skills', 'compound-engineering', 'cache');
 const VERSION_FILE = path.join(CACHE_DIR, '.version');
 const GITHUB_REPO = 'EveryInc/compound-engineering-plugin';

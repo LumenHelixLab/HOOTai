@@ -1,4 +1,5 @@
-$baseUrl = "https://raw.githubusercontent.com/EveryInc/compound-engineering-plugin/main/plugins/compound-engineering/skills"
+# Upstream moved skills from plugins/compound-engineering/skills/ to root skills/ (v3.x restructure)
+$baseUrl = "https://raw.githubusercontent.com/EveryInc/compound-engineering-plugin/main/skills"
 $cacheDir = Join-Path $PSScriptRoot ".." "skills" "compound-engineering" "cache"
 $skills = @(
   "ce-strategy",

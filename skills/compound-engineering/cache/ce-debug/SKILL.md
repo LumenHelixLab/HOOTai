@@ -1,213 +1,86 @@
 ---
 name: ce-debug
-description: 'Systematically find root causes and fix bugs. Use when debugging errors, investigating test failures, reproducing bugs from issue trackers (GitHub, Linear, Jira), or when stuck on a problem after failed fix attempts. Also use when the user says ''debug this'', ''why is this failing'', ''fix this bug'', ''trace this error'', or pastes stack traces, error messages, or issue references.'
+description: "Diagnosis loop for bugs and failing behavior. Use when asked to debug or fix failing or slow behavior."
 argument-hint: "[issue reference, error message, test path, or description of broken behavior]"
 ---
 
 # Debug and Fix
 
-Find root causes, then fix them. This skill investigates bugs systematically — tracing the full causal chain before proposing a fix — and optionally implements the fix with test-first discipline.
+Find the root cause of a failure, then — when the user chooses to — fix it with test-first discipline.
 
-<bug_description> #$ARGUMENTS </bug_description>
+**Done when:** the causal chain from trigger to symptom is stated with no gaps and file:line evidence, and either a verified fix has been handed off (PR, commit, or the user's chosen stop) or a diagnosis-only summary has been delivered. **Escalate rather than persist:** 2-3 hypotheses exhausted without confirmation, or 3 failed fix attempts, means diagnose *why* instead of trying again — that is the smart escalation `references/investigate.md` describes. One hypothesis, one change at a time; changing several to see what helps is shotgun debugging.
 
-## Core Principles
+`<bug_description>` is whatever this skill was invoked with — a failure description, a `mode:` token, or an issue reference (`#123`, `org/repo#123`, an issue URL) — from the user or from a calling skill (`ce-babysit-pr` / `lfg` in `mode:pipeline` pass the failing jobs and log tails; `lfg`'s defect route passes `mode:return-to-caller` and the user's own reference). Blank if nothing was provided.
 
-1. **Investigate before fixing.** Do not propose a fix until you can explain the full causal chain from trigger to symptom with no gaps. "Somehow X leads to Y" is a gap.
-2. **Predictions for uncertain links.** When the causal chain has uncertain or non-obvious links, form a prediction — something in a different code path or scenario that must also be true. If the prediction is wrong but a fix "works," you found a symptom, not the cause. When the chain is obvious (missing import, clear null reference), the chain explanation itself is sufficient.
-3. **One change at a time.** Test one hypothesis, change one thing. If you're changing multiple things to "see if it helps," stop — that is shotgun debugging.
-4. **When stuck, diagnose why — don't just try harder.**
+
+## Mode
+
+Default is **interactive**: investigate, run the Phase 2 fix-choice gate, then the Phase 4 handoff.
+
+**`mode:pipeline`** (set by an orchestrator such as `ce-babysit-pr` or `lfg`): run fully non-interactively and never call the blocking-question tool. Strip the token from `<bug_description>`, then **read `references/pipeline-mode.md` and follow it** — it overrides every "ask the user" point with a conservative default, replaces the Phase 2 fix-gate with "fix convergent bugs, defer divergent ones", and replaces the Phase 4 handoff with a structured return whose `status` is exactly one of `fixed-and-pushed | fixed-not-pushed | diagnosed-no-fix | flaky-infra | needs-human`. The caller branches on those exact spellings, so never rename, abbreviate, or add to them.
+
+**`mode:return-to-caller`** (set by `lfg` on its defect route): run non-interactively, but the caller owns everything after the fix. Strip the token, then **read `references/return-to-caller.md` and follow it** — it keeps Phases 0-3 and the convergent-or-defer fix boundary, applies the Phase 3 branch rule so the fix lands on a feature branch, commits the fix-owned files without pushing, skips the post-fix polish and review steps, and returns a structured result whose `status` is exactly one of `fixed | diagnosed-no-fix | needs-human | blocked`. The same spelling rule applies.
+
+## Blocking questions
+
+Wherever this skill asks the user something, use the host's blocking question tool already in the current tool list (match by capability, not by a host-specific name). Presence in the current tool list is proof the tool exists; never call a user-facing question tool to discover whether it exists. If a matching tool is listed but unloaded, use the host's tool-discovery primitive to load that capability — do not search for another host's tool name. Fall back to numbered options on the host's chat surface only when no such tool is in the list or a real question call errors. Never silently skip the question, and never end a phase without a response.
+
+## Secrets in evidence
+
+Debugging surfaces raw output constantly — command results, captured payloads, log excerpts — and the harness may render a command's output the moment it runs, so check secrets when you construct the command, not afterward. Keep credentials in env vars rather than on the command line; when a command's output may carry a secret (verbose HTTP traces, dumped headers, config or environment prints), capture it to a file and surface only sanitized excerpts, writing `<REDACTED>` in place of each secret. No secret (credential, token, auth header, connection string) appears in anything shown, written, or committed. If sanitizing removes what the diagnosis needs, say so and ask the user rather than un-redacting.
+
+## Artifact Root
+
+Resolve `<root>` only when you first compose a `<root>/` path — a run that composes none skips this entirely.
+
+<!-- ce-docs-root:start -->
+**Resolve the CE artifact root `<root>` before composing any artifact path.**
+
+- **Read** `docs_root` from `<repo-root>/.compound-engineering/config.yaml` only (`<repo-root>` = `git rev-parse --show-toplevel`). Do not read it from `config.local.yaml`. Unset -> `<root>` is `docs`, exactly as before.
+- **Validate** a set value: a repo-relative directory whose real, symlink-resolved path stays inside the repo and is neither the repo root nor under `.git/`. Otherwise stop with an error naming `docs_root` and the value -- never fall back to `docs`.
+- **Use** `<root>` as the sole artifact location: create it if absent, compose each path as `<root>/<subdir>` with this skill's own subdirectory, and never also read `docs`.
+<!-- ce-docs-root:end -->
 
 ## Execution Flow
 
-| Phase | Name | Purpose |
-|-------|------|---------|
-| 0 | Triage | Parse input, fetch issue if referenced, proceed to investigation |
-| 1 | Investigate | Reproduce the bug, trace the code path |
-| 2 | Root Cause | Form hypotheses with predictions for uncertain links, test them, **causal chain gate**, smart escalation |
-| 3 | Fix | Only if user chose to fix. Test-first fix with workspace safety checks |
-| 4 | Handoff | Structured summary, then prompt the user for the next action |
+Five phases in order: **0 Triage -> 1 Investigate -> 2 Root Cause -> 3 Fix -> 4 Handoff.** Beyond Phase 0's trivial-bug fast-path there is no skipping and no complexity tiers. A hard bug spends longer in each phase; it does not enter fewer.
 
-Beyond the trivial-bug fast-path in Phase 0, no further phase skipping — complex bugs simply spend more time in each phase naturally. No further complexity tiers.
+**Read `references/investigate.md` now and follow it for Phases 0-2** — issue fetching, reproduction, environment sanity and the dirty-tree stash experiment, backward tracing, the tracker/PR-history search, hypothesis grounding, and the escalation table. Only the gates below are stated here.
 
----
+**The issue of record.** If the user handed you a ticket or issue, that is where this bug already lives, whichever system it is in; a Sentry issue counts as much as a Linear ticket. Carry its identifier and URL through to Phase 4. If the input is only a stack trace, test path, or description, this run has **no issue of record**. That is an ordinary state, not a gap to fill: ship the fix without one, never open a ticket to manufacture a record, and never ask the user whether to. Phase 1's tracker search reads prior work and **never establishes a new home for the bug**. An existing ticket for this bug is one to *link* in Phase 4, never one to create.
 
-### Phase 0: Triage
+**The trivial-bug fast-path** (cause readable from the input, one-line fix, no deep tracing) still runs Phase 2's fix-choice gate before editing: it saves investigation ceremony, not the user's choice over whether to apply a fix.
 
-Parse the input and reach a clear problem statement.
+**Choosing the regression test.** The regression test for a *confirmed defect* belongs wherever existing coverage already owns that behavior: start from the tests that exist rather than from a new file. Read `references/fix.md` for the homes and the naming rule before writing Phase 2's recommendation, not only before Phase 3's edits. A test that fails because the change deliberately reverses the behavior it asserts does not have a wrong expectation — that is the divergent case below, deferred rather than updated.
 
-**If the input references an issue tracker**, fetch it:
-- GitHub (`#123`, `org/repo#123`, github.com URL): Parse the issue reference from `<bug_description>` and fetch with `gh issue view <number> --json title,body,comments,labels`. For URLs, pass the URL directly to `gh`.
-- Other trackers (Linear URL/ID, Jira URL/key, any tracker URL): Attempt to fetch using available MCP tools or by fetching the URL content. If the fetch fails — auth, missing tool, non-public page — ask the user to paste the relevant issue content. Ensure the fetch includes the full comment thread, not just the opening description.
+### Phase 2 gate: present, then ask
 
-Read the full conversation — the original description AND every comment, with particular attention to the latest ones. Comments frequently contain updated reproduction steps, narrowed scope, prior failed attempts, additional stack traces, or a pivot to a different suspected root cause; treating the opening post as the whole picture often sends the investigation in the wrong direction. Extract reported symptoms, expected behavior, reproduction steps, and environment details from the combined thread. Then proceed to Phase 1.
+**Causal chain gate:** do not proceed to Phase 3 until you can explain the full chain — trigger through every step to the observed symptom — with no gaps. "Somehow X leads to Y" is a gap. Only the user can authorize proceeding on a best-available hypothesis when investigation is stuck.
 
-**Everything else** (stack traces, test paths, error messages, descriptions of broken behavior): the problem statement is the input itself.
+Once the root cause is confirmed, write the findings as a user-visible block: the causal chain with file:line references; the proposed fix and the files it changes; which tests to use, add, modify, or strengthen, and whether existing tests should have caught this; and any related ticket or PR and how it shapes the recommendation — if an open PR already fixes this, lead with that link instead of a fresh fix.
 
-**Trivial-bug fast-path:** Once the problem is clear, decide whether the framework is needed at all. If the cause is immediately readable from the input (single-file typo, missing import, obvious null deref or off-by-one with a one-line fix) and verification doesn't require deep tracing, present the cause and the proposed one-line fix and run Phase 2's **Fix it now / Diagnosis only** user-choice gate before editing — the fast-path saves investigation ceremony, not the user's choice over whether to apply a fix. If the user picks fix, run Phase 3's **Workspace and branch check** (uncommitted-work confirmation and default-branch branch-creation prompt), apply the fix, leave a one-line note explaining the cause, and skip to Phase 4's structured summary. If diagnosis only, write the summary and stop. When in doubt, run the full framework; getting the wrong root cause costs more than the few minutes of ceremony.
+**Same-turn presentation before the gate:** do not open the fix-choice question until that findings block has been written in full — in this turn or the immediately preceding assistant message. The blocking question tool renders only its own stem on modal harnesses, so a question fired on "root cause confirmed" alone leaves the user choosing with none of the causal chain in front of them. Naming the options is not presenting the findings, and a promise to explain after the choice is too late.
 
-**Otherwise**, proceed to Phase 1.
-
-**Questions:**
-- Do not ask questions by default — investigate first (read code, run tests, trace errors)
-- Only ask when a genuine ambiguity blocks investigation and cannot be resolved by reading code or running tests
-- When asking, ask one specific question
-
-**Prior-attempt awareness:** If the user indicates prior failed attempts ("I've been trying", "keeps failing", "stuck"), ask what they have already tried before investigating. This avoids repeating failed approaches and is one of the few cases where asking first is the right call.
-
----
-
-### Phase 1: Investigate
-
-#### 1.1 Reproduce the bug
-
-Confirm the bug exists and understand its behavior. Run the test, trigger the error, follow reported reproduction steps — whatever matches the input.
-
-- **Browser bugs:** Prefer `agent-browser` if installed. Otherwise use whatever works — MCP browser tools, direct URL testing, screenshot capture, etc.
-- **Manual setup required:** If reproduction needs specific conditions the agent cannot create alone (data states, user roles, external services, environment config), document the exact setup steps and guide the user through them. Clear step-by-step instructions save significant time even when the process is fully manual.
-- **Does not reproduce after 2-3 attempts:** Read `references/investigation-techniques.md` for intermittent-bug techniques.
-- **Cannot reproduce at all in this environment:** Document what was tried and what conditions appear to be missing.
-- **Writing the reproduction test:** If the project has testing-conventions guidance — a dedicated testing skill, an `AGENTS.md`/`CLAUDE.md` testing section, or a clear style across existing tests — apply it when authoring the failing test. Otherwise write a minimal isolated test that fails on the current bug and passes once the corrected behavior lands; name it descriptively so the failure message itself explains the bug.
-
-#### 1.2 Verify environment sanity
-
-Before deep code tracing, confirm the environment is what you think it is:
-
-- Correct branch checked out; no unintended uncommitted changes
-- Dependencies installed and up to date (`bun install`, `npm install`, `bundle install`, etc.) — stale `node_modules`/`vendor` is a frequent false lead
-- Expected interpreter or runtime version (check `.tool-versions`, `.nvmrc`, `Gemfile`, etc. against what's actually active)
-- Required env vars present and non-empty
-- No stale build artifacts (`dist/`, `.next/`, compiled binaries from an earlier branch)
-- Dependent local services (database, cache, queue) running at expected versions *when the bug plausibly involves them*
-
-#### 1.3 Trace the code path
-
-Trace data flow backward from the symptom to where valid state first became invalid. Read code-shape to form a hypothesis, then verify with observed values — do not theorize from code alone.
-
-Concrete recipe:
-
-1. Read the stack trace bottom-to-top, opening each frame's source. The bottom frame is the symptom; the root cause is somewhere upstream.
-2. Identify the first frame where the input data is already invalid — that's the upper bound on where to look.
-3. Instrument the boundaries around that frame: targeted log/print statements, debugger breakpoints, or test assertions that capture *actual* values at function entry/exit. Assumed values lie; observed values don't.
-4. Walk the boundaries until valid input becomes invalid output. That transition is the root cause site.
-
-Do not stop at the first function that looks wrong — the root cause is where bad state originates, not where it is first observed.
-
-As you trace:
-- Check recent changes in files you are reading: `git log --oneline -10 -- [file]`
-- If the bug looks like a regression ("it worked before"), use `git bisect` (see `references/investigation-techniques.md`)
-- Check the project's observability tools for additional evidence:
-  - Error trackers (Sentry, AppSignal, Datadog, BetterStack, Bugsnag)
-  - Application logs
-  - Browser console output
-  - Database state
-- Each project has different systems available; use whatever gives a more complete picture
-
----
-
-### Phase 2: Root Cause
-
-*Reminder: investigate before fixing. Do not propose a fix until you can explain the full causal chain from trigger to symptom with no gaps.*
-
-Read `references/anti-patterns.md` before forming hypotheses. As a load-time preview of the rationalizations it covers, stop and re-examine if the internal monologue contains any of these:
-
-- "Quick fix for now, investigate later"
-- "This should work" (without a tested prediction)
-- "Let me just try..." (without a hypothesis)
-
-These phrases mark mode-drift toward symptom patches, not progress on the root cause. ("One more attempt" after a failed fix and "works on my machine" are covered at the points they fire — Phase 3's invalidation step and the Smart Escalation table below.)
-
-**Assumption audit (before hypothesis formation):** List the concrete "this must be true" beliefs your understanding depends on — the framework behaves as expected here, this function returns what its name implies, the config loads before this runs, the caller passes a non-null value, the database is in the state the test implies. For each, mark *verified* (you read the code, checked state, or ran it) or *assumed*. Assumptions are the most common source of stuck debugging. Many "wrong hypotheses" are actually correct hypotheses tested against a wrong assumption.
-
-**Form hypotheses** ranked by likelihood. For each, state:
-- What is wrong and where (file:line)
-- **At least one concrete observation that supports it** — a runtime variable value, a log line, an instrumented boundary capture, a behavior delta against a working comparison case, or a specific code reference. "X seems off" is not evidence; "X equals null at line 42 because Y was never initialized in the constructor path that runs under condition Z" is. Hypotheses without grounding observations are theorizing — go back to Phase 1 and instrument.
-- The causal chain: how the trigger leads to the observed symptom, step by step
-- **For uncertain links in the chain**: a prediction — something in a different code path or scenario that must also be true if this link is correct
-
-When the causal chain is obvious and has no uncertain links (missing import, clear type error, explicit null dereference), the chain explanation itself is the gate — no prediction required. Predictions are a tool for testing uncertain links, not a ritual for every hypothesis.
-
-Before forming a new hypothesis, review what has already been ruled out and why.
-
-**Causal chain gate:** Do not proceed to Phase 3 until you can explain the full causal chain — from the original trigger through every step to the observed symptom — with no gaps. The user can explicitly authorize proceeding with the best-available hypothesis if investigation is stuck.
-
-*Reminder: if a prediction was wrong but the fix appears to work, you found a symptom. The real cause is still active.*
-
-#### Present findings
-
-Once the root cause is confirmed, present:
-- The root cause (causal chain summary with file:line references)
-- The proposed fix and which files would change
-- Which tests to add or modify to prevent recurrence (specific test file, test case description, what the assertion should verify)
-- Whether existing tests should have caught this and why they did not
-
-Then offer next steps.
-
-Use the platform's blocking question tool (`AskUserQuestion` in Claude Code, `request_user_input` in Codex, `ask_user` in Gemini, `ask_user` in Pi (requires the `pi-ask-user` extension)). In Claude Code, call `ToolSearch` with `select:AskUserQuestion` first if its schema isn't loaded — a pending schema load is not a reason to fall back. Fall back to numbered options in chat only when no blocking tool exists in the harness or the call errors (e.g., Codex edit modes). Never silently skip the question.
-
-Options to offer:
+When the request has not already authorized the next action, ask (per **Blocking questions**) which path to take, offering these three options. An explicit fix request is Phase 3. An explicit diagnosis-only request skips to Phase 4. `mode:pipeline` and `mode:return-to-caller` never ask. The test recommendations are part of the diagnosis either way.
 
 1. **Fix it now** — proceed to Phase 3
-2. **Diagnosis only — I'll take it from here** — skip the fix, proceed to Phase 4's summary, and end the skill
-3. **Rethink the design** (`/ce-brainstorm`) — only when the root cause reveals a design problem (see below)
+2. **Diagnosis only — I'll take it from here** — skip the fix, write Phase 4's summary, end the skill
+3. **Rethink the design** (`ce-brainstorm`) — only when the bug cannot be fixed within the current design: the root cause is a wrong responsibility or interface rather than wrong logic, the requirements themselves are wrong, or every candidate fix is a workaround around an assumption that no longer holds. Size alone is not a design problem.
 
-Do not assume the user wants action right now. The test recommendations are part of the diagnosis regardless of which path is chosen.
-
-**When to suggest brainstorm:** Only when investigation reveals the bug cannot be properly fixed within the current design — the design itself needs to change. Concrete signals observable during debugging:
-
-- **The root cause is a wrong responsibility or interface**, not wrong logic. The module should not be doing this at all, or the boundary between components is in the wrong place. (Observable: the fix requires moving responsibility between modules, not correcting code within one.)
-- **The requirements are wrong or incomplete.** The system behaves as designed, but the design does not match what users actually need. The "bug" is really a product gap. (Observable: the code is doing exactly what it was written to do — the spec is the problem.)
-- **Every fix is a workaround.** You can patch the symptom, but cannot articulate a clean fix because the surrounding code was built on an assumption that no longer holds. (Observable: you keep wanting to add special cases or flags rather than a direct correction.)
-
-Do not suggest brainstorm for bugs that are large but have a clear fix — size alone does not make something a design problem.
-
-#### Smart escalation
-
-If 2-3 hypotheses are exhausted without confirmation, diagnose why:
-
-| Pattern | Diagnosis | Next move |
-|---------|-----------|-----------|
-| Hypotheses point to different subsystems | Architecture/design problem, not a localized bug | Present findings, suggest `/ce-brainstorm` |
-| Evidence contradicts itself | Wrong mental model of the code | Step back, re-read the code path without assumptions |
-| Works locally, fails in CI/prod | Environment problem | Focus on env differences, config, dependencies, timing |
-| Fix works but prediction was wrong | Symptom fix, not root cause | The real cause is still active — keep investigating |
-
-**Parallel investigation option:** When hypotheses are evidence-bottlenecked across clearly independent subsystems, dispatch read-only sub-agents in parallel, each with an explicit hypothesis and structured evidence-return format. No code edits by sub-agents, and skip this when hypotheses depend on each other's outcomes. If the platform does not support parallel sub-agent dispatch, run the same hypothesis probes sequentially in ranked-likelihood order instead — the parallelism is a latency optimization, not a correctness requirement.
-
-Present the diagnosis to the user before proceeding.
-
----
+**`mode:pipeline` and `mode:return-to-caller`:** do not ask. Proceed to Phase 3 and apply a **convergent** fix; a **divergent** fix — one that would reverse a deliberate contract/behavior/product decision, including a "failing" test that asserts intended behavior — is deferred, not applied, per `references/pipeline-mode.md` or `references/return-to-caller.md`. Never route to `ce-brainstorm` here; a design problem becomes a `needs-human` residual.
 
 ### Phase 3: Fix
 
-*Reminder: one change at a time. If you are changing multiple things, stop.*
+If the user chose "Diagnosis only," skip to Phase 4's summary. If they chose "Rethink the design," control has transferred to `ce-brainstorm` and this skill ends.
 
-If the user chose "Diagnosis only" at the end of Phase 2, skip this phase and go straight to Phase 4 for the summary — the skill's job was the diagnosis. If they chose "Rethink the design", control has transferred to `/ce-brainstorm` and this skill ends.
+**Read `references/fix.md` before editing any file** — the test-first sequence, the failed-fix rule, and the defense-in-depth and post-mortem triggers. Two rules decide whether the fix may start at all, so they stay here:
 
-**Workspace and branch check:** Before editing files:
-
-- Check for uncommitted changes (`git status`). If the user has unstaged work in files that need modification, confirm before editing — do not overwrite in-progress changes.
-- If the current branch is the default branch, ask whether to create a feature branch first using the platform's blocking question tool (see Phase 2 for the per-platform names). To detect the default branch, compare against `main`, `master`, or the value of `git rev-parse --abbrev-ref origin/HEAD` with its `origin/` prefix stripped (the raw output is `origin/<name>`, so an unstripped comparison will never match the local branch name). Default to creating one; derive a name from the bug and run `git checkout -b <name>`. On any other branch, proceed.
-
-**Test-first:**
-1. Write a failing test that captures the bug (or use the existing failing test)
-2. Verify it fails for the right reason — the root cause, not unrelated setup
-3. Implement the minimal fix — address the root cause and nothing else. Do not bundle drive-by refactors, formatting, or unrelated cleanup into a bug-fix change; those belong in separate commits.
-4. Verify the test passes
-5. Run the broader test suite for regressions
-6. Self-review the diff before declaring the fix done: read every changed line and check for style violations, missed edge cases, regressions in adjacent behavior, and missing test coverage for the fix. For non-trivial fixes (multiple files, risky surface area), also run the harness's lightweight review tool (e.g., `/review` in Claude Code; the equivalent in other harnesses) — not the full `ce-code-review` multi-agent flow, which is PR-tier and over-sized for a single bug fix.
-
-**On a failed fix:** return to Phase 2 and *explicitly invalidate the current hypothesis* before forming a new one. State out loud what evidence ruled out the prior hypothesis, then form a new one with its own grounding observation and prediction. Do not retry variants of the same theory ("maybe it was the other branch", "let me also catch this case") — that is the rationalization spiral, not iteration.
-
-**3 failed fix attempts = smart escalation.** Diagnose using the same table from Phase 2. If fixes keep failing, the root cause identification was likely wrong. Return to Phase 2.
-
-**Conditional defense-in-depth** (trigger: grep for the root-cause pattern found it in 3+ other files, OR the bug would have been catastrophic if it reached production): Read `references/defense-in-depth.md` for the four-layer model (entry validation, invariant check, environment guard, diagnostic breadcrumb) and choose which layers apply. Skip when the root cause is a one-off error with no realistic recurrence path.
-
-**Conditional post-mortem** (trigger: the bug was in production, OR the pattern appears in 3+ locations):
-Analyze how this was introduced and what allowed it to survive. Note any systemic gap or repeated pattern found — it informs Phase 4's decision on whether to offer learning capture.
-
----
+- **Branch.** Check `git status`; if the user has unstaged work in files that need modification, confirm before editing. If the current branch is the default branch, create a feature branch without asking — derive a name from the bug, `git checkout -b <name>`, and say which branch you moved to. Detect the default by comparing against `main`, `master`, or `git rev-parse --abbrev-ref origin/HEAD` **with its `origin/` prefix stripped** — the raw output is `origin/<name>`, so an unstripped comparison never matches.
+- **Record the pre-fix scope:** current `HEAD`, whether `git status --short` is clean, and any pre-existing changed files. Then keep a list of **fix-owned files** (the tests and implementation changed for this bug) as you work. Phase 4 answers both of its questions from this record and cannot reconstruct it afterwards.
 
 ### Phase 4: Handoff
+
+**`mode:pipeline` — skip this entire interactive handoff.** No polish or review steps, no residual questions, no preview, no learning-capture offer. Commit and push the convergent fix per `references/pipeline-mode.md`, then emit that reference's **structured return**. Divergent / needs-human items are deferred there (open thread or the caller's run-report comment — never a PR-body section). **`mode:return-to-caller` — skip it too:** commit the fix-owned files on the feature branch, push nothing, and emit the structured return `references/return-to-caller.md` defines. In both modes the return is the last thing this skill writes. It ends this skill, not the turn. The caller runs in this same session, and its next step follows the return; do not announce a handoff to it. The rest of this section is the interactive path only.
 
 **Structured summary** — always write this first:
 
@@ -217,36 +90,33 @@ Analyze how this was introduced and what allowed it to survive. Note any systemi
 **Root Cause**: [Full causal chain, with file:line references]
 **Recommended Tests**: [Tests to add/modify to prevent recurrence, with specific file and assertion guidance]
 **Fix**: [What was changed — or "diagnosis only" if Phase 3 was skipped]
-**Prevention**: [Test coverage added; defense-in-depth if applicable]
+**Prevention**: [Test coverage added; structural fix or defense-in-depth if applicable, or the structural fix left as follow-up]
 **Confidence**: [High/Medium/Low]
 ```
 
-**If Phase 3 was skipped** (user chose "Diagnosis only" in Phase 2), stop after the summary — the user already told you they were taking it from here. Do not prompt.
+**If Phase 3 was skipped**, stop after the summary — the user already said they were taking it from here. Do not prompt.
 
-**If Phase 3 ran**, the next move depends on whether the skill created the branch in Phase 3.
+**If Phase 3 ran, read `references/post-fix-handoff.md` now and follow it before routing below.** It defines the quality steps after a fix: the contextual-override checks, the skip rule for mechanical fixes, the scoping that keeps `ce-simplify-code` and `ce-code-review` off unrelated branch work, what to do with leftover findings, the `## Post-Fix Quality` block, and the criteria for offering to capture a learning. None of that appears in this body. The routing below names *which* action runs, never the scope rules that make it safe, so it cannot be improvised from. Skipping the read ships an unreviewed fix, lets review reach into unrelated branch work, and strands accepted findings in the session.
 
-#### Skill-owned branch (created in Phase 3): default to commit-and-PR without prompting
+#### Routing
 
-1. **Check for contextual overrides first.** Look at the user's original prompt, loaded memories, and the user/repo `AGENTS.md` or `CLAUDE.md` for preferences that conflict with auto commit-and-PR — for example, "always review before pushing", "open PRs as drafts", or "don't open PRs from skills". A signal must be an explicit instruction or a clearly applicable rule, not a vague tonal cue. If any apply, honor them — switch to the pre-existing-branch menu below, or skip the PR step entirely, whichever matches the user's stated preference.
-2. **Briefly preview what will happen** — what will be committed, on what branch, and that a PR will be opened — then proceed without waiting for confirmation. The preview exists so the user can interrupt; it is not a blocking question. Format and length are your call; keep it scannable.
-3. **Run `/ce-commit-push-pr`.** When the entry came from an issue tracker, include the appropriate auto-close syntax for that tracker in the location it requires — most trackers parse PR descriptions (e.g., `Fixes #N` for GitHub, `Closes ABC-123` for Linear), but some only parse commit messages (e.g., Jira Smart Commits) — so the diagnosis and fix flow back to the issue and it closes on merge. Surface the resulting PR URL.
+**Land the fix without carrying along anything the user did not offer up** — not into a commit, not into a push, not into a PR. Do not ask whether to open a PR; permission is not the gate. Two questions decide the handoff. Answer them from the pre-fix scope Phase 3 recorded, not from how the branch came to exist. **Fire the action itself** via the platform's skill-invocation primitive — never merely tell the user to type a command.
 
-#### Pre-existing branch (skill did not create it): ask the user
+**1. What may go into the commit — the fix-owned files and nothing else.** This is a constraint on whichever skill commits in question 2, never an action of its own. It holds on every route, remote or not. Do not commit here.
 
-Use the platform's blocking question tool (`AskUserQuestion` in Claude Code, `request_user_input` in Codex, `ask_user` in Gemini, `ask_user` in Pi (requires the `pi-ask-user` extension)). In Claude Code, call `ToolSearch` with `select:AskUserQuestion` first if its schema isn't loaded — a pending schema load is not a reason to fall back. Fall back to numbered options in chat only when no blocking tool exists in the harness or the call errors. Never end the phase without collecting a response.
+- If no fix-owned file carried pre-existing edits, those files are the commit scope. Pass them to whichever skill commits.
+- If a fix-owned file already carried the user's edits, no commit can separate them: `ce-commit` groups at file level and never splits a file. Ask (per **Blocking questions**) *before* anything commits whether to commit that file including their edits, leave the fix uncommitted, or stop. Only the first answer continues. The other two end the handoff, so question 2 never runs and nothing commits; say what was left and why. Every option loses something the agent cannot choose on the user's behalf, which is why this question survives. Phase 3's confirmation covered *editing* the file, never committing the user's edits with the fix.
 
-Options:
+**2. Who commits, and whether it ships.** Exactly one of these runs.
 
-1. **Commit and open a PR (`/ce-commit-push-pr`)** — default for most cases
-2. **Commit the fix (`/ce-commit`)** — local commit only
-3. **Stop here** — user takes it from there
+- **Ships** when all three hold: the pre-fix tree was clean, nothing on the branch is work the user has not already offered, and `origin` is **PR-capable**: somewhere `gh` can actually open a PR. Establish those however fits the repo in front of you. Two facts make it less obvious than it looks.
+  - `ce-commit-push-pr` pushes the **whole branch**, and its PR spans every commit on it, not just your fix. So the question is about the branch, not your diff. It also pushes *before* creating the PR, so a remote `gh` cannot open a PR against leaves the branch published with no PR.
+  - Already pushed is not already **offered**. Commits in an open PR are under review, so they are offered, and this run updates that PR rather than opening a second one. Commits pushed for backup or to trigger CI are not offered, and a first PR would publish them. Compare against the remote rather than a local ref: a local branch, including the default branch Phase 3 may have branched off, can itself be ahead of what was pushed.
 
-#### After a PR is open (either path): consider offering learning capture
+  If you cannot establish all three, take the local route instead; that is the safe direction, and the preview is not a substitute for it. Otherwise preview what will be committed, on what branch, and whether a PR opens or updates, then **invoke the `ce-commit-push-pr` skill with `branding:on`.** It commits under question 1's scope, so do not commit first. The preview is a statement, not a question. Surface the resulting PR URL.
+- **Stays local** when any of those three fails. Invoke the `ce-commit` skill under question 1's scope and push nothing. Say in one line what stayed local and why, and that you will push and open the PR on request. Do not ask first; a local commit is reversible.
+- **Not a git repo**: nothing commits. Stop after the summary and the quality block.
 
-Most bugs are localized mechanical fixes (typo, missed null check, missing import) where the only "lesson" is the bug itself. Compounding those clutters `docs/solutions/` without adding value. Decide which path applies:
+**Contextual override** ("don't open PRs from skills", "commit only", "stop after the fix") — follow what the user said, and **Stop here** without committing when that is what they asked for. A vague tonal cue is not an override.
 
-- **Skip silently** when the fix is mechanical and there's no generalizable insight. Default to this when in doubt.
-- **Offer neutrally** when the lesson can be stated in one sentence — e.g., "X.foo() returns T | undefined when Y, not just T", or "the diagnostic path was non-obvious and worth recording." If you cannot articulate the lesson, skip rather than offer.
-- **Lean into the offer** when the pattern appears in 3+ locations OR the root cause reveals a wrong assumption about a shared dependency, framework, or convention that other code is likely to repeat.
-
-When offering, use the blocking question tool described above. If the user accepts, run `/ce-compound`, then commit the resulting learning doc to the same branch and push so the open PR picks up the new commit.
+**After a PR is open** — apply the reference's learning-capture criteria. Only when that gate qualifies the fix, offer capture; if the user accepts, invoke the `ce-compound` skill, then commit and push only the artifacts it actually wrote or updated so the open PR picks them up. If it writes nothing, end without a documentation commit.
