@@ -1,7 +1,34 @@
-const { describe, it } = require('node:test');
+const { describe, it, after } = require('node:test');
 const assert = require('node:assert');
+const os = require('os');
+const path = require('path');
+
+// Isolate the key vault before loading chat/key-vault so host machine keys
+// cannot leak into cloud-provider resolution (mirrors chat-key.test.js).
+process.env.AGENTDOCK_KEY_VAULT_FILE = path.join(os.tmpdir(), `hoot-coach-chat-test-${process.pid}.json`);
+
 const { buildCoachChatResponse } = require('../coach-chat');
 const { processChatMessage, clearChat } = require('../chat');
+
+// Point Ollama detection at a closed port: these tests assert the coach-local
+// fallback, which must not depend on a real Ollama running on the host.
+const NO_LOCAL_BRAIN_SETTINGS = {
+  localInference: { ollama: { host: 'http://127.0.0.1:9' } },
+  hoot_brain: { mode: 'auto' },
+};
+
+const savedEnv = {};
+for (const name of ['GEMINI_API_KEY', 'GOOGLE_API_KEY']) {
+  savedEnv[name] = process.env[name];
+  delete process.env[name];
+}
+
+after(() => {
+  for (const [name, value] of Object.entries(savedEnv)) {
+    if (value === undefined) delete process.env[name];
+    else process.env[name] = value;
+  }
+});
 
 describe('coach-chat', () => {
   it('buildCoachChatResponse is conversational not operations report', () => {
@@ -38,6 +65,7 @@ describe('coach-chat', () => {
       },
       provider: 'gemini',
       apiKey: 'invalid-key-for-test',
+      settings: NO_LOCAL_BRAIN_SETTINGS,
     });
     assert.strictEqual(res.source, 'coach-local');
     assert.ok(!res.text.includes('=== AgentDock Operations Report ==='));
@@ -84,6 +112,7 @@ describe('coach-chat', () => {
       },
       provider: 'gemini',
       apiKey: undefined,
+      settings: NO_LOCAL_BRAIN_SETTINGS,
     });
     assert.strictEqual(res.source, 'coach-local');
     assert.ok(!res.text.includes('Operations Report'));

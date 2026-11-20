@@ -1,5 +1,7 @@
-const { describe, it } = require('node:test');
+const { describe, it, before, after } = require('node:test');
 const assert = require('node:assert');
+const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const {
   buildPipelineOverview,
@@ -20,6 +22,21 @@ const PORTFOLIO_ROOT = path.dirname(HOOT_ROOT);
 // filesystem, so they only pass on a full portfolio machine — never on a fresh
 // clone. They are skipped unless HOOT_INTEGRATION_TESTS=1 is set.
 const INTEGRATION = Boolean(process.env.HOOT_INTEGRATION_TESTS);
+
+// Hermetic portfolio root: buildPipelineOverview only needs MILESTONES.md on disk;
+// bridge probes against closed localhost ports fail fast and are not asserted here.
+let FIXTURE_PORTFOLIO_ROOT;
+
+before(() => {
+  FIXTURE_PORTFOLIO_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'hoot-portfolio-'));
+  fs.writeFileSync(path.join(FIXTURE_PORTFOLIO_ROOT, 'MILESTONES.md'), `Milestone-Version: 2026-06-11.1
+| 1 | Portfolio Foundation | done | ecc |
+| 2 | HOOT Kernel GA | done | Hoot |`);
+});
+
+after(() => {
+  fs.rmSync(FIXTURE_PORTFOLIO_ROOT, { recursive: true, force: true });
+});
 
 describe('portfolio-pipeline', () => {
   it('parseMilestones reads milestone table', () => {
@@ -52,7 +69,7 @@ describe('portfolio-pipeline', () => {
         active: HOOT_ROOT,
         projects: [{ name: 'Hoot', path: HOOT_ROOT, type: 'node' }],
       },
-      portfolioRoot: PORTFOLIO_ROOT,
+      portfolioRoot: FIXTURE_PORTFOLIO_ROOT,
     });
     assert.ok(report.bridges.length >= 3);
     assert.ok(report.integration_matrix.length >= 5);
@@ -70,7 +87,8 @@ describe('portfolio-pipeline', () => {
     assert.ok(['verified', 'ready', 'incomplete'].includes(health.status));
   });
 
-  it('checkLookbookLabBridge reports lab module readiness', () => {
+  // Integration-only: needs the sibling lookBOOK lab module + e2e script on disk.
+  it('checkLookbookLabBridge reports lab module readiness', { skip: !INTEGRATION }, () => {
     const health = checkLookbookLabBridge(PORTFOLIO_ROOT);
     assert.strictEqual(health.id, 'lookbook-lab');
     assert.strictEqual(health.modules_ready, true);
@@ -90,13 +108,15 @@ describe('portfolio-pipeline', () => {
     assert.ok(report.bridge_health.some((b) => b.id === 'lookbook-director-graph'));
   });
 
-  it('checkStoryRenderBridge reports script readiness', () => {
+  // Integration-only: needs the sibling pipeline-story-render e2e script on disk.
+  it('checkStoryRenderBridge reports script readiness', { skip: !INTEGRATION }, () => {
     const health = checkStoryRenderBridge(PORTFOLIO_ROOT);
     assert.strictEqual(health.id, 'story-render-chain');
     assert.strictEqual(health.e2e_script, true);
   });
 
-  it('checkRenderGraphSidecar reports module readiness', () => {
+  // Integration-only: needs the sibling cineforge render-graph sidecar spec on disk.
+  it('checkRenderGraphSidecar reports module readiness', { skip: !INTEGRATION }, () => {
     const health = checkRenderGraphSidecar(PORTFOLIO_ROOT);
     assert.strictEqual(health.id, 'cineforge-render-graph');
     assert.strictEqual(health.modules_ready, true);

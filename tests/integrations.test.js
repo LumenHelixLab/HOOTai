@@ -4,10 +4,14 @@ const fs = require('fs');
 const path = require('path');
 const http = require('http');
 const { startTestServer, stopTestServer } = require('./helpers/test-server');
+const { ensureStateFixtures } = require('./helpers/state-fixtures');
 
 const ROOT = path.join(__dirname, '..');
 
 describe('integrations catalog files', () => {
+  before(() => {
+    ensureStateFixtures();
+  });
   it('mcp-catalog.json has git and opt-in fetch servers', () => {
     const file = path.join(ROOT, 'state', 'mcp-catalog.json');
     const data = JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -47,6 +51,7 @@ describe('integrations API', () => {
   let baseUrl;
 
   before(async () => {
+    ensureStateFixtures();
     ({ server, baseUrl } = await startTestServer());
   });
 

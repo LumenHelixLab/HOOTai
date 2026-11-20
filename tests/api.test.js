@@ -4,6 +4,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const { startTestServer, stopTestServer } = require('./helpers/test-server');
+const { ensureStateFixtures } = require('./helpers/state-fixtures');
 
 const MEMORY_PATH = path.join(__dirname, '..', 'memory.md');
 let originalMemory = '';
@@ -14,6 +15,7 @@ describe('api', () => {
 
   before(async () => {
     originalMemory = fs.existsSync(MEMORY_PATH) ? fs.readFileSync(MEMORY_PATH, 'utf8') : '';
+    ensureStateFixtures();
     ({ server, baseUrl } = await startTestServer());
   });
 

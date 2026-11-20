@@ -1,0 +1,44 @@
+{
+  "version": "1.0",
+  "servers": [
+    {
+      "id": "git",
+      "name": "MCP Git",
+      "package": "mcp-server-git",
+      "risk_tier": "low",
+      "enabled_by_default": true,
+      "operator_allowed": true,
+      "read_only": false,
+      "install": {
+        "windows": { "command": "uvx", "args": ["mcp-server-git", "--repository", "{{REPO_PATH}}"] },
+        "unix": { "command": "uvx", "args": ["mcp-server-git", "--repository", "{{REPO_PATH}}"] }
+      }
+    },
+    {
+      "id": "fetch",
+      "name": "MCP Fetch",
+      "package": "mcp-server-fetch",
+      "risk_tier": "medium",
+      "enabled_by_default": false,
+      "operator_allowed": true,
+      "read_only": true,
+      "install": {
+        "windows": { "command": "uvx", "args": ["mcp-server-fetch"] },
+        "unix": { "command": "uvx", "args": ["mcp-server-fetch"] }
+      }
+    },
+    {
+      "id": "filesystem-hoot",
+      "name": "HOOT Filesystem (read-only)",
+      "package": "@modelcontextprotocol/server-filesystem",
+      "risk_tier": "low",
+      "enabled_by_default": false,
+      "operator_allowed": true,
+      "read_only": true,
+      "install": {
+        "windows": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "{{REPO_PATH}}"] },
+        "unix": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "{{REPO_PATH}}"] }
+      }
+    }
+  ]
+}

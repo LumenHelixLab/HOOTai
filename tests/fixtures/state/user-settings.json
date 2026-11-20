@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "localInference": {
+    "lmstudio": { "enabled": false, "host": "127.0.0.1", "port": 1234 },
+    "llamacpp": { "enabled": false, "host": "127.0.0.1", "port": 8081 }
+  }
+}

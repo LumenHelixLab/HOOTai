@@ -227,6 +227,9 @@ const DEFAULT_USER_SETTINGS = {
 };
 const activityLog = createActivityLog({ stateFile: FILES.activityLog, diaryDir: DIARY_DIR, root: ROOT });
 const UI_DIST = path.join(ROOT, 'ui', 'dist');
+// Tracked Vite public dir — its contents are copied into ui/dist on build, so it is a
+// faithful fallback for bundled assets (e.g. docs/) on a fresh clone without a UI build.
+const UI_PUBLIC = path.join(ROOT, 'ui', 'public');
 const SKILLS_DIR = path.join(ROOT, 'skills', 'compound-engineering');
 const SKILLS_CATALOG = path.join(SKILLS_DIR, 'skills-catalog.json');
 
@@ -2012,6 +2015,18 @@ function serveStatic(req, res) {
   const distFile = path.join(UI_DIST, pathname.slice(1));
   if (fs.existsSync(distFile) && !fs.statSync(distFile).isDirectory()) {
     return sendStaticFile(res, distFile, pathname);
+  }
+
+  // Fallback to the tracked ui/public assets Vite would have copied into dist
+  // (keeps /docs/manifest.json and bundled docs working without a UI build)
+  let publicFile = null;
+  try {
+    publicFile = safeJoin(UI_PUBLIC, pathname.slice(1));
+  } catch {
+    publicFile = null;
+  }
+  if (publicFile && fs.existsSync(publicFile) && !fs.statSync(publicFile).isDirectory()) {
+    return sendStaticFile(res, publicFile, pathname);
   }
 
   // Fallback to root directory (for old index.html, profiles, etc.)

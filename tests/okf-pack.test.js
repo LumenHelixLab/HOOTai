@@ -1,11 +1,55 @@
-const { describe, it } = require('node:test');
+const { describe, it, before, after } = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const okf = require('../okf-pack');
 
-const PACKS = path.resolve(__dirname, '..', '..', 'packs');
-const MYDEV = path.join(PACKS, 'mydev-control-plane');
-const HELIX = path.join(PACKS, 'helixos-core');
+// The real packs live in a sibling portfolio checkout (../packs), which a fresh
+// clone does not have — build equivalent fixture packs under os.tmpdir() instead.
+let PACKS;
+let MYDEV;
+let HELIX;
+
+function writePack(root, name, concepts) {
+  const dir = path.join(root, name);
+  fs.mkdirSync(path.join(dir, 'concepts'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'okf.json'), JSON.stringify({
+    format: 'lumenhelix-okf/1',
+    name,
+    version: '1.0.0',
+    description: `Fixture pack ${name}`,
+  }, null, 2));
+  for (const c of concepts) {
+    const { body, ...frontmatter } = c;
+    const fm = Object.entries({ status: 'active', ...frontmatter })
+      .map(([k, v]) => `${k}: ${JSON.stringify(v)}`)
+      .join('\n');
+    fs.writeFileSync(path.join(dir, 'concepts', `${c.id}.md`), `---\n${fm}\n---\n\n${body || ''}\n`);
+  }
+  return dir;
+}
+
+before(() => {
+  PACKS = fs.mkdtempSync(path.join(os.tmpdir(), 'hoot-okf-packs-'));
+  MYDEV = writePack(PACKS, 'mydev-control-plane', [
+    { id: 'concept.mydev.thrall_pool', title: 'Thrall Pool', type: 'architecture', body: 'Thrall pool orchestrates worker agents.' },
+    { id: 'concept.mydev.scheduler', title: 'Scheduler', type: 'design' },
+    { id: 'concept.mydev.registry', title: 'Registry', type: 'reference' },
+  ]);
+  HELIX = writePack(PACKS, 'helixos-core', [
+    { id: 'concept.helixos.gate2', title: 'Gate 2', type: 'architecture' },
+    { id: 'concept.helixos.kernel', title: 'Kernel', type: 'design' },
+    { id: 'concept.helixos.memory', title: 'Memory', type: 'reference' },
+  ]);
+  writePack(PACKS, 'knotstore-core', [
+    { id: 'concept.knotstore.core', title: 'Knotstore', type: 'reference' },
+  ]);
+});
+
+after(() => {
+  fs.rmSync(PACKS, { recursive: true, force: true });
+});
 
 describe('okf-pack', () => {
   it('validates mydev-control-plane', () => {

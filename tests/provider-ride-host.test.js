@@ -1,9 +1,14 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert');
+const host = require('../provider-ride-host');
+
+// The ProviderRide package is a sibling checkout (../provider-ride, or
+// PROVIDER_RIDE_ROOT) that a fresh clone does not have — skip when absent.
+const SKIP = !host.resolveRoot();
+const SKIP_REASON = 'ProviderRide sibling package not found';
 
 describe('ProviderRide host bridge', () => {
-  it('resolves sibling package and runs doctor', () => {
-    const host = require('../provider-ride-host');
+  it('resolves sibling package and runs doctor', { skip: SKIP && SKIP_REASON }, () => {
     const meta = host.meta();
     assert.strictEqual(meta.available, true, meta.error || 'package missing');
     assert.ok(meta.root && meta.root.includes('provider-ride'));
@@ -26,8 +31,7 @@ describe('ProviderRide host bridge', () => {
     assert.ok(Array.isArray(report.fixes));
   });
 
-  it('booth resolve is allowlist-only', async () => {
-    const host = require('../provider-ride-host');
+  it('booth resolve is allowlist-only', { skip: SKIP && SKIP_REASON }, async () => {
     const dry = await host.openBooth('claude', 'usage', { dryRun: true });
     assert.strictEqual(dry.ok, true);
     assert.ok(dry.url.startsWith('https://'));

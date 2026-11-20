@@ -50,7 +50,7 @@ npm test
 node --test tests/*.test.js
 ```
 
-Integration lane: the two cross-repo readiness checks in `tests/portfolio-pipeline.test.js` skip by default (they assert sibling-checkout state of lookBOOK/cineforge). Run them with `HOOT_INTEGRATION_TESTS=1 npm test`.
+Integration lane: the five cross-repo readiness checks in `tests/portfolio-pipeline.test.js` skip by default (they assert sibling-checkout state of lookBOOK/cineforge), as do the sibling-package checks in `tests/provider-ride-host.test.js` when `../provider-ride` is absent. Run them with `HOOT_INTEGRATION_TESTS=1 npm test`.
 
 ### Test Structure
 
